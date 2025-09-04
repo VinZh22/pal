@@ -19,26 +19,31 @@ from typing import Any, Callable, List, Optional
 from collections import Counter
 
 from .runtime import GenericRuntime
-from .backend import call_gpt, call_chat_gpt
-
+from .backend import OpenAIBackend, HuggingFaceBackend
+import threading
 
 class timeout:
     def __init__(self, seconds=1, error_message='Timeout'):
         self.seconds = seconds
         self.error_message = error_message
-    def timeout_handler(self, signum, frame):
-        raise TimeoutError(self.error_message)
+
     def __enter__(self):
-        signal.signal(signal.SIGALRM, self.timeout_handler)
-        signal.alarm(self.seconds)
+        self.timer = threading.Timer(self.seconds, self.raise_timeout)
+        self.timer.start()
+        return self
+
+    def raise_timeout(self):
+        raise TimeoutError(self.error_message)
+
     def __exit__(self, type, value, traceback):
-        signal.alarm(0)
+        self.timer.cancel()
 
 
 class TextInterface:
     
     def __init__(
         self,
+        backend: str = 'openai',
         model: str = 'code-davinci-002',
         answer_prefix: str = 'The answer is:',
         stop: str = '\n\n\n',
@@ -49,7 +54,15 @@ class TextInterface:
         self.extract_answer_fn = extract_answer
         self.stop = stop
         self.model = model
-        
+        self.backend = backend
+
+        if backend == 'openai':
+            self.backend_instance = OpenAIBackend()
+        elif backend == 'huggingface':
+            self.backend_instance = HuggingFaceBackend()
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
+
     def clear_history(self):
         self.history = []
     
@@ -60,7 +73,7 @@ class TextInterface:
         return last_line[len(self.answer_prefix):].strip()
     
     def run(self, prompt, temperature=0.0, top_p=1.0, majority_at=None, max_tokens=512):
-        gen = call_gpt(prompt, model=self.model, stop=self.stop, 
+        gen = self.backend_instance.call_gpt(prompt, model=self.model, stop=self.stop,
             temperature=temperature, top_p=top_p, max_tokens=max_tokens, majority_at=majority_at)
         self.history.append(gen)
         return self.extract_answer(gen)
@@ -70,6 +83,7 @@ class ProgramInterface:
     
     def __init__(
         self,
+        backend: str = 'openai',
         model: str = 'code-davinci-002',
         runtime: Optional[Any] = None,
         stop: str = '\n\n',
@@ -87,7 +101,10 @@ class ProgramInterface:
         self.answer_expr = get_answer_expr
         self.get_answer_from_stdout = get_answer_from_stdout
         self.verbose = verbose
-        
+        self.backend = backend
+        self.backend_instance = OpenAIBackend() if backend == 'openai' else HuggingFaceBackend()
+
+
     def clear_history(self):
         self.history = []
     
@@ -96,7 +113,7 @@ class ProgramInterface:
     
     def generate(self, prompt: str, temperature: float =0.0, top_p: float =1.0, 
             max_tokens: int =512, majority_at: int =None, ):
-        gens = call_gpt(prompt, model=self.model, stop=self.stop, 
+        gens = self.backend_instance.call_gpt(prompt, model=self.model, stop=self.stop, 
             temperature=temperature, top_p=top_p, max_tokens=max_tokens, majority_at=majority_at, )
         if self.verbose:
             print(gens)
@@ -142,8 +159,10 @@ class ProgramInterface:
         
         counter = Counter(results)
         return counter.most_common(1)[0][0]
-    
-    
+
+    def get_tokens_used(self):
+        return self.backend_instance.tokens_used
+
 SYSTEM_MESSAGES = 'You are a helpful python programmer.'
 class ProgramChatInterface(ProgramInterface):
     def __init__(self, *args, system_message: str = SYSTEM_MESSAGES, **kwargs):
@@ -152,7 +171,7 @@ class ProgramChatInterface(ProgramInterface):
         
     def generate(self, prompt: str, temperature: float = 0, top_p: float = 1, max_tokens: int = 512):
         messages =[{'role': 'system', 'content': self.system_message}, {'role': 'user', 'content': prompt}]
-        gen = call_chat_gpt(messages, model=self.model, stop=self.stop, temperature=temperature, top_p=top_p, max_tokens=max_tokens)
+        gen = self.backend_instance.call_chat_gpt(messages, model=self.model, stop=self.stop, temperature=temperature, top_p=top_p, max_tokens=max_tokens)
         if self.verbose:
             print(gen)
         self.history.append(gen)

@@ -28,6 +28,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--append', action='store_true')
 parser.add_argument('--verbose', action='store_true')
 parser.add_argument('--dataset', default='gsm', type=str)
+parser.add_argument('--API_provider', choices=['openai', 'huggingface'], default='openai', type=str)
 parser.add_argument('--model', default='code-davinci-002', type=str)
 parser.add_argument('--majority_at', default=None, type=int)
 parser.add_argument('--temperature', default=0.0, type=float)
@@ -42,6 +43,7 @@ os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
 examples = list(map(json.loads, open(DATA_PATH)))
 
 itf = interface.ProgramInterface(
+    backend=args.API_provider,
     stop='\n\n\n',
     get_answer_expr='solution()',
     model=args.model,
@@ -58,6 +60,8 @@ else:
 
 with open(OUTPUT_PATH, 'a' if args.append else 'w') as f:
     pbar = tqdm.tqdm(examples[num_skip_exps:], initial=num_skip_exps, total=len(examples))
+    current_score = sum(scores) / len(scores) if scores else 0
+    step = len(scores)
     for x in pbar:
         question = x['input']
         result = copy.copy(x)
@@ -74,7 +78,10 @@ with open(OUTPUT_PATH, 'a' if args.append else 'w') as f:
             ans = ''
             score = 0
         scores.append(score)
-        
+        current_score = (step/(step+1))*current_score + (score/(step+1))
+        pbar.set_postfix({'score': current_score, "tokens_used": itf.get_tokens_used()})
+        pbar.update()
+        step += 1
         result['answer'] = ans
         result['score'] = score
         result['generation'] = itf.history

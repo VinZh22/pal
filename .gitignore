@@ -139,3 +139,6 @@ local/*
 
 # vscode
 .vscode
+
+# eval results
+eval_results/
